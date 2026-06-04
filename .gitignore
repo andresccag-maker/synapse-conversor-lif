@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Build / distribución
+build/
+dist/
+*.spec
+assets/icon.iconset/
+assets/MicrosoftEdgeWebview2Setup.exe
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code internos
+.claude/
+
+# Asset original importado (sustituido por assets/generate_icon.py + icon-source.png)
+assets/ChatGPT Image*.png
