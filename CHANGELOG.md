@@ -3,6 +3,24 @@
 Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [0.3.1] — 2026-06-04
+
+### Added
+- **Build Intel para macOS** vía matrix CI (`macos-13` + `macos-14`). La Release
+  v0.3.1 incluye dos `.dmg`: `arm64` (Apple Silicon nativo) y `x86_64` (Intel
+  nativo, también corre en AS vía Rosetta 2). Cubre laboratorios con iMacs/MBP
+  Intel anteriores a 2020.
+- `build_macos.sh` honora `ARCH_SUFFIX` para añadir la arquitectura al nombre
+  del DMG en builds multi-arch.
+- Página `axiombio.tech/apps/lif-converter`: dos botones macOS (Apple Silicon /
+  Intel) con auto-detección del SO+arquitectura para resaltar el correcto.
+
+### Fixed
+- `build_macos.sh:98` "ARCH_FLAG[@]: unbound variable" bajo `set -u` (bash 3.2
+  macOS default) cuando `TARGET_ARCH` no se exportaba — idiom empty-safe.
+- `axiombio-website/apps/*`: dejaban de mostrar el fondo `bg-platform.webp` del
+  resto del site porque sobreescribían `body { background }`.
+
 ## [0.3.0] — 2026-06-04
 
 ### Added

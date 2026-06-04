@@ -147,7 +147,15 @@ fi
 # Si create-dmg no está, se salta sin error — la .app sigue siendo válida.
 # ---------------------------------------------------------------------------
 APP_VERSION=$(grep -E '^APP_VERSION' core.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-DMG_PATH="dist/SYN APSE Conversor LIF v${APP_VERSION}.dmg"
+# ARCH_SUFFIX permite distinguir DMGs en matrix builds (CI):
+#   ARCH_SUFFIX=arm64  → "SYN APSE Conversor LIF v0.3.1 arm64.dmg"
+#   ARCH_SUFFIX=x86_64 → "SYN APSE Conversor LIF v0.3.1 x86_64.dmg"
+#   sin set            → "SYN APSE Conversor LIF v0.3.1.dmg" (local single-arch)
+DMG_ARCH_LABEL=""
+if [ -n "${ARCH_SUFFIX:-}" ]; then
+  DMG_ARCH_LABEL=" ${ARCH_SUFFIX}"
+fi
+DMG_PATH="dist/SYN APSE Conversor LIF v${APP_VERSION}${DMG_ARCH_LABEL}.dmg"
 if command -v create-dmg >/dev/null 2>&1; then
   echo "[build] generando DMG: $DMG_PATH"
   rm -f "$DMG_PATH"
