@@ -15,12 +15,13 @@ on:
 jobs:
 
   build-macos:
-    # Runner Intel (x86_64). El binario producido corre en Intel nativo y en
-    # Apple Silicon vía Rosetta 2 — cobertura máxima sin matrix multi-arch.
-    # Pillow >=11 no publica wheels universal2, así que --target-arch universal2
-    # falla (binarios PIL no son fat). Cuando importe nativo en AS, añadir un
-    # job paralelo en macos-14 con suffix -arm64.
-    runs-on: macos-13
+    # macos-14 = Apple Silicon (arm64). Runner siempre disponible (los
+    # macos-13 Intel están deprecándose y tardan >30 min en cola).
+    # El .dmg resultante es arm64-only: requiere Mac M1/M2/M3/M4.
+    # Para Intel: añadir un job paralelo en macos-13 cuando los runners
+    # vuelvan a ser razonables, o construir con --target-arch universal2
+    # cuando Pillow publique wheels universal2 (hoy no las publica).
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +38,7 @@ jobs:
           python -m pip install -r requirements.txt
           python assets/generate_icon.py
 
-      - name: Build .app + .dmg (Intel x86_64 — corre en AS vía Rosetta)
+      - name: Build .app + .dmg (Apple Silicon arm64)
         run: bash build_macos.sh
 
       - name: Locate DMG
