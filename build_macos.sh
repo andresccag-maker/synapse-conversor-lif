@@ -104,8 +104,11 @@ pyinstaller \
   --clean \
   --collect-all webview \
   --collect-all readlif \
-  "${ARCH_FLAG[@]}" \
+  "${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"}" \
   app.py
+# Nota: la sintaxis "${ARRAY[@]+"${ARRAY[@]}"}" es empty-safe bajo `set -u`
+# (bash 3.2 default de macOS) — expande a NADA si el array está vacío en
+# lugar de quejarse de "unbound variable".
 
 APP_PATH="dist/${APP_NAME}.app"
 if [ ! -d "$APP_PATH" ]; then
