@@ -63,7 +63,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; App bundle de PyInstaller (carpeta completa)
 Source: "dist\{#AppFolder}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Bootstrapper de WebView2 — descargado por build_windows.ps1 si falta (ver [Code])
-Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: WebView2NotInstalled; ExternalSize: 2000000
+; ExternalSize solo aplica con Flags:external; aquí el bootstrapper se compila
+; dentro del .exe (descargado por build_windows.ps1) y se borra tras instalar.
+Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: WebView2NotInstalled
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
