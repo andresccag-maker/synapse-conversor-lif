@@ -1,11 +1,22 @@
 name: Release
 
-# Compila .dmg (macOS) y .exe (Windows) cuando se publica un tag `v*`, los
-# sube a GitHub Releases. La landing de axiombio.tech/apps/lif-converter
-# enlaza directamente a los artefactos de "latest".
+# Compila .dmg (macOS arm64 + macOS x86_64) y .exe (Windows) cuando se
+# publica un tag `v*`, los sube a GitHub Releases. La landing de
+# axiombio.tech/apps/lif-converter enlaza directamente a los artefactos
+# de "latest".
 #
-# Para liberar v0.3.0:
-#   git tag v0.3.0 && git push origin v0.3.0
+# Diseño desacoplado:
+#   - build-macos-arm64 + build-windows: rápidos, siempre disponibles.
+#     publish-fast publica la Release con esos dos artefactos en cuanto
+#     terminan (no espera al runner Intel saturado).
+#   - build-macos-intel (macos-13): puede tardar 30-60 min en cola por
+#     la deprecación de los runners Intel. Cuando termine, publish-intel
+#     adjunta el .dmg Intel al MISMO Release (action-gh-release@v2 hace
+#     upsert por tag). Si falla / se cancela, el Release queda con AS +
+#     Windows y la página oculta el botón Intel automáticamente.
+#
+# Para liberar v0.X.Y:
+#   git tag v0.X.Y && git push origin v0.X.Y
 
 on:
   push:
@@ -14,113 +25,118 @@ on:
 
 jobs:
 
-  build-macos:
-    # Matrix:
-    #   - macos-14 (Apple Silicon arm64) → DMG arm64, M1/M2/M3/M4 nativo
-    #   - macos-13 (Intel x86_64)        → DMG x86_64, Macs Intel nativo
-    #                                       (también corre en AS vía Rosetta 2)
-    # Cada leg sube su DMG como artefacto independiente; el job publish los
-    # adjunta ambos a la misma Release.
-    # `fail-fast: false` → si Intel tarda mucho/falla, AS sigue independiente.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            arch: arm64
-          - runner: macos-13
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+  build-macos-arm64:
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install create-dmg
         run: brew install create-dmg
-
-      - name: Generate icon assets (consistente con job Windows)
+      - name: Generate icon assets
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python assets/generate_icon.py
-
-      - name: Build .app + .dmg (${{ matrix.arch }})
+      - name: Build .app + .dmg (arm64)
         env:
-          ARCH_SUFFIX: ${{ matrix.arch }}
+          ARCH_SUFFIX: arm64
         run: bash build_macos.sh
-
       - name: Locate DMG
         id: find_dmg
         run: |
           dmg=$(ls dist/*.dmg 2>/dev/null | head -1)
           if [ -z "$dmg" ]; then
-            echo "::error::No DMG generated in dist/ for ${{ matrix.arch }}"
+            echo "::error::No DMG generated in dist/"
             ls -la dist/
             exit 1
           fi
           echo "path=$dmg" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
-
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-${{ matrix.arch }}
+          name: macos-dmg-arm64
+          path: ${{ steps.find_dmg.outputs.path }}
+
+  build-macos-intel:
+    # Runner Intel saturado por la deprecación de macos-13 — puede
+    # tardar 30-60 min en arrancar. Sin fail-fast cross-job: este se
+    # publica por separado.
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install create-dmg
+        run: brew install create-dmg
+      - name: Generate icon assets
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python assets/generate_icon.py
+      - name: Build .app + .dmg (x86_64)
+        env:
+          ARCH_SUFFIX: x86_64
+        run: bash build_macos.sh
+      - name: Locate DMG
+        id: find_dmg
+        run: |
+          dmg=$(ls dist/*.dmg 2>/dev/null | head -1)
+          if [ -z "$dmg" ]; then
+            echo "::error::No DMG generated in dist/"
+            ls -la dist/
+            exit 1
+          fi
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-x86_64
           path: ${{ steps.find_dmg.outputs.path }}
 
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
-
       - name: Generate icon assets
         run: |
           python -m pip install -r requirements.txt
           python assets/generate_icon.py
-
       - name: Build installer
         shell: pwsh
         run: ./build_windows.ps1
-
       - name: Locate installer
         id: find_exe
         shell: pwsh
         run: |
           $exe = Get-ChildItem dist\SYN-APSE-Conversor-LIF-Setup-*.exe | Select-Object -First 1
           "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "name=$($exe.Name)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
       - uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: ${{ steps.find_exe.outputs.path }}
 
-  publish:
-    needs: [build-macos, build-windows]
+  # Publica la Release en cuanto arm64 + windows están listos.
+  # Crea el Release y adjunta esos dos artefactos.
+  publish-fast:
+    needs: [build-macos-arm64, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # Descarga TODOS los artefactos mac (cualquier leg de la matrix:
-      # arm64, x86_64) y los aplana a un solo directorio.
       - uses: actions/download-artifact@v4
         with:
-          pattern: macos-dmg-*
-          merge-multiple: true
+          name: macos-dmg-arm64
           path: artifacts/
       - uses: actions/download-artifact@v4
         with:
           name: windows-exe
           path: artifacts/
-
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -129,3 +145,21 @@ jobs:
           files: |
             artifacts/*.dmg
             artifacts/*.exe
+
+  # Cuando termine el build Intel (si termina), adjunta su DMG al
+  # MISMO Release. action-gh-release@v2 hace upsert por tag.
+  publish-intel:
+    needs: [publish-fast, build-macos-intel]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg-x86_64
+          path: artifacts/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            artifacts/*.dmg
