@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SYN APSE — Conversor LIF
+GenericName=LIF/TIFF → MIP converter
+Comment=Convierte archivos LIF (Leica) y TIFFs a TIFF/MIP para el pipeline de Axiom Bio
+Exec=SYN_APSE_Conversor_LIF
+Icon=@ICON_NAME@
+Categories=Science;Graphics;Utility;
+Terminal=false

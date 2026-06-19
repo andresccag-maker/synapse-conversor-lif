@@ -34,10 +34,18 @@ def main(argv: list[str] | None = None) -> int:
         prog="convert_cli",
         description="SYN APSE — Conversor LIF (headless)",
     )
-    parser.add_argument("lif", help="ruta al archivo .lif")
+    parser.add_argument("lif", nargs="?", help="ruta al archivo .lif")
+    parser.add_argument(
+        "--tif-folder",
+        help="modo TIF→MIP: carpeta raíz con Experimento/Pocillo/*.tif (Z-stacks por canal)",
+    )
     parser.add_argument("-o", "--output", help="carpeta de salida")
     parser.add_argument("--experiment", help="nombre del experimento (override sugerencia)")
     parser.add_argument("--pocillo", help="nombre del pocillo (override sugerencia)")
+    parser.add_argument(
+        "--base-name",
+        help="modo TIF→MIP: override del {base} en el nombre de salida (por defecto, el pocillo)",
+    )
     parser.add_argument(
         "--exclude",
         type=int,
@@ -51,6 +59,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--info", action="store_true", help="solo imprimir metadatos")
 
     args = parser.parse_args(argv)
+
+    def cb(done: int, total: int, folder: str) -> None:
+        print(f"[{done}/{total}] {folder}")
+
+    # ---- Modo TIF → MIP ----
+    if args.tif_folder:
+        if args.lif:
+            print("ERROR: usa o un .lif o --tif-folder, no ambos", file=sys.stderr)
+            return 2
+        if not args.output:
+            print("ERROR: se requiere -o/--output en modo --tif-folder", file=sys.stderr)
+            return 2
+        scan = core.scan_tif_folder(args.tif_folder)
+        print(
+            f"tif-folder: {scan.n_files} ficheros · {scan.n_experiments} experimento(s) · "
+            f"{scan.n_pocillos} pocillo(s) · {scan.n_images} imagen(es) · "
+            f"canales crudos={scan.raw_channels}"
+        )
+        if args.info:
+            return 0
+        opts = core.TifFolderOptions(
+            input_dir=args.tif_folder,
+            output_dir=args.output,
+            base_name=args.base_name,
+        )
+        summary = core.convert_tif_folder(opts, progress_cb=cb)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+
+    # ---- Modo LIF (comportamiento original) ----
+    if not args.lif:
+        print("ERROR: indica un .lif o usa --tif-folder", file=sys.stderr)
+        return 2
 
     info, _ = core.read_lif_info(args.lif, with_previews=False)
     _print_info(info)
@@ -73,9 +114,6 @@ def main(argv: list[str] | None = None) -> int:
         exclude_channels_0based=list(args.exclude or []),
         projection=projection,
     )
-
-    def cb(done: int, total: int, folder: str) -> None:
-        print(f"[{done}/{total}] {folder}")
 
     summary = core.convert(args.lif, opts, progress_cb=cb)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

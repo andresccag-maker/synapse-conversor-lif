@@ -11,6 +11,7 @@ dist/
 *.spec
 assets/icon.iconset/
 assets/MicrosoftEdgeWebview2Setup.exe
+assets/appimagetool-*.AppImage
 
 # IDE
 .vscode/

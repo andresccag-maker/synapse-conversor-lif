@@ -514,6 +514,56 @@ code {
   text-overflow: ellipsis;
 }
 
+/* ----- Mode toggle (segmented) ----- */
+.mode-toggle {
+  display: inline-flex;
+  margin-top: var(--space-4);
+  padding: 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  gap: 2px;
+}
+.mode-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-btn:hover { color: var(--text); }
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.mode-btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+
+/* ----- TIF scan summary ----- */
+.scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-3);
+}
+.scan-stat {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  text-align: center;
+}
+.scan-stat .n { font-size: var(--text-2xl); font-weight: 700; color: var(--text); }
+.scan-stat .lbl {
+  font-size: var(--text-xs); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+
 /* ----- Result toast ----- */
 .result {
   position: fixed;

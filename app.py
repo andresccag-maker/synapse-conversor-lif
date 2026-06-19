@@ -17,6 +17,7 @@ class Api:
     def __init__(self) -> None:
         self._window = None
         self._lif_path: str | None = None
+        self._tif_dir: str | None = None
 
     def set_window(self, window) -> None:
         self._window = window
@@ -45,6 +46,16 @@ class Api:
         if not result:
             return None
         return result[0] if isinstance(result, (list, tuple)) else result
+
+    def choose_tif_folder(self):
+        if self._window is None:
+            return None
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        self._tif_dir = path
+        return path
 
     # ---------------- inspection ----------------
 
@@ -124,6 +135,47 @@ class Api:
                 self._emit("progress", {"done": done, "total": total, "folder": folder})
 
             summary = core.convert(path, opts, progress_cb=cb)
+            self._emit("done", summary)
+        except Exception as exc:
+            self._emit("error", {
+                "message": str(exc),
+                "trace": traceback.format_exc(),
+            })
+
+    # ---------------- modo TIF → MIP ----------------
+
+    def inspect_tif_folder(self, path: str):
+        self._tif_dir = path
+        scan = core.scan_tif_folder(path)
+        return asdict(scan)
+
+    def run_convert_tif(self, opts_dict: dict):
+        tif_dir = opts_dict.get("input_dir") or self._tif_dir
+        if not tif_dir:
+            self._emit("error", {"message": "No hay carpeta de TIFFs seleccionada", "trace": ""})
+            return False
+        threading.Thread(
+            target=self._convert_tif_worker,
+            args=(tif_dir, opts_dict),
+            daemon=True,
+        ).start()
+        return True
+
+    def _convert_tif_worker(self, tif_dir: str, opts_dict: dict) -> None:
+        try:
+            opts = core.TifFolderOptions(
+                input_dir=tif_dir,
+                output_dir=opts_dict["output_dir"],
+                base_name=opts_dict.get("base_name") or None,
+            )
+
+            def cb(done: int, total: int, folder: str) -> None:
+                self._emit("progress", {"done": done, "total": total, "folder": folder})
+
+            summary = core.convert_tif_folder(opts, progress_cb=cb)
+            # Normaliza el resumen para que el front muestre el mismo "done"
+            summary.setdefault("series_written", summary.get("pocillos_written", 0))
+            summary.setdefault("output_root", summary.get("output_dir", ""))
             self._emit("done", summary)
         except Exception as exc:
             self._emit("error", {
