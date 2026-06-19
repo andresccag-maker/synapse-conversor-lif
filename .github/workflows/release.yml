@@ -119,25 +119,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python assets/generate_icon.py
-      - name: Build AppImage (x86_64)
+      - name: Build AppImage + tarball (x86_64)
         env:
           ARCH_SUFFIX: x86_64
         run: bash build_linux.sh
-      - name: Locate AppImage
-        id: find_appimage
+      - name: Check artifacts
         run: |
-          art=$(ls dist/*.AppImage 2>/dev/null | head -1)
-          if [ -z "$art" ]; then art=$(ls dist/*.tar.gz 2>/dev/null | head -1); fi
-          if [ -z "$art" ]; then
-            echo "::error::No se generó AppImage ni tarball en dist/"
-            ls -la dist/
-            exit 1
-          fi
-          echo "path=$art" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+          test -n "$(ls dist/*.AppImage dist/*.tar.gz 2>/dev/null)" \
+            || { echo "::error::No se generó AppImage ni tarball en dist/"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: linux-appimage-x86_64
-          path: ${{ steps.find_appimage.outputs.path }}
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
 
   build-linux-arm64:
     # Runner ARM64 nativo (gratis en repos públicos). PyInstaller no
@@ -164,25 +160,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python assets/generate_icon.py
-      - name: Build AppImage (arm64)
+      - name: Build AppImage + tarball (arm64)
         env:
           ARCH_SUFFIX: arm64
         run: bash build_linux.sh
-      - name: Locate AppImage
-        id: find_appimage
+      - name: Check artifacts
         run: |
-          art=$(ls dist/*.AppImage 2>/dev/null | head -1)
-          if [ -z "$art" ]; then art=$(ls dist/*.tar.gz 2>/dev/null | head -1); fi
-          if [ -z "$art" ]; then
-            echo "::error::No se generó AppImage ni tarball en dist/"
-            ls -la dist/
-            exit 1
-          fi
-          echo "path=$art" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+          test -n "$(ls dist/*.AppImage dist/*.tar.gz 2>/dev/null)" \
+            || { echo "::error::No se generó AppImage ni tarball en dist/"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: linux-appimage-arm64
-          path: ${{ steps.find_appimage.outputs.path }}
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
 
   build-windows:
     runs-on: windows-latest
