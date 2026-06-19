@@ -1,12 +1,15 @@
 "use strict";
 
 const state = {
+  mode: "lif",         // "lif" | "tif"
   lifPath: null,
   outDir: null,
   info: null,
   excluded: new Set(), // canales 0-indexados excluidos
   maxChannels: 0,
   lutNames: [],        // [{name, rgb}], igual orden que canal 0..n-1
+  tifDir: null,
+  tifScan: null,       // resultado de inspect_tif_folder
 };
 
 const el = (id) => document.getElementById(id);
@@ -18,7 +21,49 @@ function setOutputPath(p) {
 }
 
 function updateConvertEnabled() {
-  el("btn-convert").disabled = !(state.lifPath && state.outDir && state.info);
+  let ready;
+  if (state.mode === "tif") {
+    ready = !!(state.tifDir && state.outDir && state.tifScan && state.tifScan.n_files > 0);
+  } else {
+    ready = !!(state.lifPath && state.outDir && state.info);
+  }
+  el("btn-convert").disabled = !ready;
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  const isTif = mode === "tif";
+  el("mode-lif").classList.toggle("active", !isTif);
+  el("mode-tif").classList.toggle("active", isTif);
+  el("mode-lif").setAttribute("aria-selected", String(!isTif));
+  el("mode-tif").setAttribute("aria-selected", String(isTif));
+
+  el("hero-text").innerHTML = isTif
+    ? "TIFFs ya exportados (<code>Experimento/Pocillo/*.tif</code>) → MIP por canal · local, sin subir nada"
+    : "Leica <code>.lif</code> → TIFFs por canal · procesamiento local, sin subir nada";
+
+  // Card 1: origen
+  el("lif-block").hidden = isTif;
+  el("tif-block").hidden = !isTif;
+  // Card 2: campos
+  el("field-exp").hidden = isTif;
+  el("field-pocillo").hidden = isTif;
+  el("field-base").hidden = !isTif;
+  // Proyección: en TIF se fija a MIP
+  const proj = el("projection");
+  if (isTif) {
+    proj.value = "mip";
+    proj.disabled = true;
+  } else {
+    proj.disabled = false;
+  }
+  setProjectionHint();
+  // Card 3
+  el("card3-title").textContent = isTif ? "TIFFs detectados" : "Series detectadas";
+  el("series-section").hidden = isTif;
+  el("tif-scan-section").hidden = !isTif;
+
+  updateConvertEnabled();
 }
 
 function fmtPx(v) {
@@ -130,11 +175,35 @@ function renderChips() {
 }
 
 function setProjectionHint() {
+  if (state.mode === "tif") {
+    el("proj-hint").textContent =
+      "TIF → MIP: proyección máxima por canal. Cada .tif (Z-stack) → un plano (1, Y, X).";
+    return;
+  }
   const mode = el("projection").value;
   el("proj-hint").textContent =
     mode === "mip"
       ? "MIP: cada canal se guarda como un único plano (1, Y, X) preservando dtype."
       : "Z-stack completo: idéntico a la macro original, sin proyección.";
+}
+
+function renderTifScan(scan) {
+  el("scan-experiments").textContent = scan.n_experiments;
+  el("scan-pocillos").textContent = scan.n_pocillos;
+  el("scan-images").textContent = scan.n_images;
+  el("scan-files").textContent = scan.n_files;
+  el("scan-channels").textContent =
+    scan.raw_channels && scan.raw_channels.length
+      ? scan.raw_channels.map((c) => "c" + c).join(", ")
+      : "—";
+  const hint = el("scan-hint");
+  if (hint) {
+    hint.textContent = scan.n_files
+      ? scan.n_files + " ficheros · cada canal de cada imagen → MIP (naming worker, C 0-indexado)."
+      : "No se encontraron .tif bajo la carpeta elegida.";
+  }
+  const count = el("series-count");
+  if (count) count.textContent = scan.n_files + " ficheros";
 }
 
 // -------- pywebview bridge --------
@@ -198,14 +267,15 @@ function handleProgress(p) {
 function handleDone(s) {
   el("progress-bar").style.width = "100%";
   el("progress-text").textContent =
-    "Listo · " + s.series_written + " serie(s) · " +
-    (s.files_written || 0) + " ficheros";
+    state.mode === "tif"
+      ? "Listo · " + (s.pocillos_written || 0) + " pocillo(s) · " + (s.files_written || 0) + " MIPs"
+      : "Listo · " + (s.series_written || 0) + " serie(s) · " + (s.files_written || 0) + " ficheros";
   const box = el("result");
   box.hidden = false;
   box.className = "result ok";
   box.innerHTML =
     "Conversión completada. Salida: <code></code>";
-  box.querySelector("code").textContent = s.output_root;
+  box.querySelector("code").textContent = s.output_root || s.output_dir || "";
 }
 
 function handleError(e) {
@@ -250,6 +320,33 @@ async function init() {
       handleError({ message: String(err), trace: "" });
     }
   }
+
+  async function loadTifFolder(p) {
+    state.tifDir = p;
+    el("tif-path").textContent = p;
+    el("progress-text").textContent = "escaneando…";
+    try {
+      const scan = await api.inspect_tif_folder(p);
+      state.tifScan = scan;
+      renderTifScan(scan);
+      el("tif-meta").hidden = false;
+      el("tif-summary").textContent =
+        scan.n_files + " .tif · " + scan.n_pocillos + " pocillo(s) · " + scan.n_images + " imagen(es)";
+      el("progress-text").textContent = scan.n_files ? "listo" : "sin .tif en la carpeta";
+      updateConvertEnabled();
+    } catch (err) {
+      handleError({ message: String(err), trace: "" });
+    }
+  }
+
+  el("mode-lif").addEventListener("click", () => setMode("lif"));
+  el("mode-tif").addEventListener("click", () => setMode("tif"));
+
+  el("btn-pick-tif").addEventListener("click", async () => {
+    const p = await api.choose_tif_folder();
+    if (!p) return;
+    await loadTifFolder(p);
+  });
 
   el("btn-pick-lif").addEventListener("click", async () => {
     const p = await api.choose_lif();
@@ -296,6 +393,17 @@ async function init() {
   setProjectionHint();
 
   el("btn-convert").addEventListener("click", async () => {
+    el("result").hidden = true;
+    el("progress-bar").style.width = "0%";
+    el("progress-text").textContent = "iniciando…";
+    if (state.mode === "tif") {
+      await api.run_convert_tif({
+        input_dir: state.tifDir,
+        output_dir: state.outDir,
+        base_name: el("base-name").value || "",
+      });
+      return;
+    }
     const opts = {
       output_dir: state.outDir,
       experiment: el("exp").value || "Experimento",
@@ -305,11 +413,10 @@ async function init() {
       ),
       projection: el("projection").value,
     };
-    el("result").hidden = true;
-    el("progress-bar").style.width = "0%";
-    el("progress-text").textContent = "iniciando…";
     await api.run_convert(opts);
   });
+
+  setMode("lif");
 }
 
 document.addEventListener("DOMContentLoaded", init);
