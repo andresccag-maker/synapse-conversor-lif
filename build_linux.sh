@@ -139,13 +139,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Tarball (fallback sin FUSE / portable)
+# Tarball — SIEMPRE (opción sin FUSE para usuarios no técnicos: extraer y
+# ejecutar el binario, sin libfuse2 ni chmod especial del AppImage).
 # ---------------------------------------------------------------------------
 TARBALL="dist/${OUT_BASE}.tar.gz"
-if [ "$appimage_ok" -ne 1 ]; then
-  echo "[build] generando tarball: $TARBALL"
-  tar -C dist -czf "$TARBALL" "$APP_BIN_NAME"
-fi
+echo "[build] generando tarball (sin FUSE): $TARBALL"
+tar -C dist -czf "$TARBALL" "$APP_BIN_NAME"
 
 echo
 echo "[build] OK"
