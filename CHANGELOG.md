@@ -3,6 +3,17 @@
 Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [0.4.1] — 2026-06-19
+
+### Fixed
+- **AppImage de Linux compatible con Ubuntu 22.04+**: los jobs de CI de Linux
+  pasan de `ubuntu-latest`/`ubuntu-24.04-arm` (GLIBC 2.39) a `ubuntu-22.04`/
+  `ubuntu-22.04-arm` (GLIBC 2.35). Los AppImage son compatibles **hacia
+  adelante**, no hacia atrás: el de v0.4.0 (construido en 24.04) exigía
+  `GLIBC_2.38` y fallaba en Ubuntu 22.04 (la Jetson y la mayoría de equipos de
+  laboratorio) con `libpython3.11.so: version GLIBC_2.38 not found`. Compilando
+  en 22.04 el AppImage corre en 22.04 y posteriores.
+
 ## [0.4.0] — 2026-06-19
 
 ### Added
