@@ -95,7 +95,11 @@ jobs:
           path: ${{ steps.find_dmg.outputs.path }}
 
   build-linux-x86_64:
-    runs-on: ubuntu-latest
+    # Ubuntu 22.04 (GLIBC 2.35), NO 24.04: los AppImage son compatibles hacia
+    # adelante, no hacia atrás. Compilar en 22.04 → corre en 22.04 y posteriores
+    # (cubre la Jetson y la mayoría de equipos de laboratorio). Compilar en 24.04
+    # exigía GLIBC 2.38+ y rompía en 22.04.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -138,7 +142,9 @@ jobs:
   build-linux-arm64:
     # Runner ARM64 nativo (gratis en repos públicos). PyInstaller no
     # cross-compila → aarch64 debe construirse en aarch64.
-    runs-on: ubuntu-24.04-arm
+    # 22.04 (GLIBC 2.35), no 24.04: AppImage compatible hacia adelante → corre
+    # en la Jetson (Ubuntu 22.04). Ver build-linux-x86_64.
+    runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
