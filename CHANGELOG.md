@@ -12,6 +12,12 @@ Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
   `--collect-all gi` no empaquetaba nada. Ahora los jobs de Linux usan el Python
   del sistema + `python3-gi`/`python3-gi-cairo` de apt (mismo stack validado en
   la Jetson). Se elimina `generate_icon` en Linux (el icono va commiteado).
+- **TIF→MIP ahora conserva el nombre y espeja la estructura**: si el TIFF de
+  entrada ya tiene naming canónico (`{base} - Image{NNN} - C={c}.tif`, p. ej. la
+  salida previa de LIF→TIF) se CONSERVA verbatim y solo se hace el MIP; la
+  estructura de carpetas (pocillos) se replica en la salida. El estilo `..._c{N}`
+  se sigue re-derivando. Antes asumía solo `imagen1_c1.tif` y fallaba con datos
+  reales (`Exp109 ... - Image029 - C=4.tif`).
 
 ## [0.4.1] — 2026-06-19
 
