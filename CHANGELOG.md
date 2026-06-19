@@ -3,6 +3,16 @@
 Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [0.4.2] — 2026-06-19
+
+### Fixed
+- **Linux: la app ya carga GTK** (`pywebview: GTK cannot be loaded` /
+  `import gi`). La CI compilaba con `setup-python` 3.11 mientras el binding
+  `python3-gi` de apt es para el Python del sistema (3.10), así que
+  `--collect-all gi` no empaquetaba nada. Ahora los jobs de Linux usan el Python
+  del sistema + `python3-gi`/`python3-gi-cairo` de apt (mismo stack validado en
+  la Jetson). Se elimina `generate_icon` en Linux (el icono va commiteado).
+
 ## [0.4.1] — 2026-06-19
 
 ### Fixed
