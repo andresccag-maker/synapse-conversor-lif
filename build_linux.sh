@@ -34,7 +34,9 @@ ARCH_LABEL="${ARCH_SUFFIX:-$MACHINE_ARCH}"
 
 if [ ! -d ".venv" ]; then
   echo "[build] no existe .venv — creándolo"
-  python3 -m venv .venv
+  # --system-site-packages: el backend GTK de pywebview usa el PyGObject (gi)
+  # del sistema (apt python3-gi). PyInstaller --collect-all gi necesita verlo.
+  python3 -m venv .venv --system-site-packages
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
@@ -42,7 +44,7 @@ source .venv/bin/activate
 echo "[build] instalando dependencias (incluye pyinstaller)"
 pip install --upgrade pip >/dev/null
 pip install -r requirements.txt >/dev/null
-pip install "pyinstaller>=6.0" >/dev/null
+pip install "pyinstaller>=6.0" appdirs >/dev/null
 
 if [ ! -f "$ICON_SRC" ]; then
   echo "[build] ERROR: falta $ICON_SRC — ejecuta antes: .venv/bin/python assets/generate_icon.py" >&2
@@ -64,7 +66,21 @@ pyinstaller \
   --collect-all webview \
   --collect-all readlif \
   --collect-all gi \
+  --hidden-import appdirs \
+  --exclude-module matplotlib \
+  --exclude-module tkinter \
+  --exclude-module PyQt5 \
+  --exclude-module PyQt6 \
+  --exclude-module PySide2 \
+  --exclude-module PySide6 \
+  --exclude-module pandas \
+  --exclude-module scipy \
+  --exclude-module pytest \
   app.py
+# --exclude-module: con --system-site-packages, PyInstaller "ve" paquetes del
+# sistema (matplotlib, Qt…) que la app NO usa y cuyos hooks pueden romper el
+# análisis (p. ej. matplotlib vs numpy con ABI distinta). La app solo necesita
+# gi/webview/readlif/numpy/tifffile/PIL.
 
 DIST_DIR="dist/${APP_BIN_NAME}"
 if [ ! -d "$DIST_DIR" ]; then
