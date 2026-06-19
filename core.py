@@ -19,7 +19,7 @@ import numpy as np
 import tifffile
 from PIL import Image
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 
 logger = logging.getLogger(__name__)
 
@@ -476,5 +476,296 @@ def convert(
         "manifest_path": str(output_root / "_manifest.json"),
         "series_written": done,
         "files_written": len(manifest_files),
+        "details": details,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Modo TIF → MIP (lote sobre carpetas Experimento/Pocillo/*.tif)
+# ---------------------------------------------------------------------------
+#
+# Convierte TIFFs ya exportados (un canal por fichero, Z-stack multipágina)
+# directamente a MIP, SIN volver al .lif. Reutiliza el mismo contrato de salida
+# que LIF→MIP (mismas funciones project_mip/_save_tiff/bioformats_channel_filename
+# + _manifest.json) para que el worker lo lea idéntico. Lo único nuevo es leer
+# los TIFF de entrada y derivar serie/canal del nombre y carpetas.
+
+# Sufijo de canal en el nombre del TIFF: "_c1", "_c2", "_ch0"... (case-insensitive)
+_TIF_CHANNEL_RE = re.compile(r"_c[h]?(\d+)$", re.IGNORECASE)
+_TIF_SUFFIXES = (".tif", ".tiff")
+
+
+@dataclass
+class TifFolderOptions:
+    input_dir: str
+    output_dir: str
+    base_name: Optional[str] = None  # override del {base} en el nombre de salida
+    recurse: bool = True
+
+
+@dataclass
+class TifScan:
+    input_dir: str
+    files: list = field(default_factory=list)  # records: path/rel/experiment/pocillo/image_stem/raw_channel
+    n_experiments: int = 0
+    n_pocillos: int = 0
+    n_images: int = 0
+    n_files: int = 0
+    raw_channels: list = field(default_factory=list)  # canales crudos únicos (de los sufijos _cN)
+
+
+def _natural_key(s: str) -> list:
+    """Orden natural: imagen2 < imagen10 (no lexicográfico)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
+
+
+def _parse_image_and_channel(stem: str) -> tuple[str, Optional[int]]:
+    """De 'imagen1_c2' → ('imagen1', 2). Sin sufijo → (stem, None)."""
+    m = _TIF_CHANNEL_RE.search(stem)
+    if m:
+        return stem[: m.start()], int(m.group(1))
+    return stem, None
+
+
+def _read_tiff_zstack(path) -> np.ndarray:
+    """Lee un TIFF (un canal) como (Z, Y, X). 2D → (1, Y, X). Aplana singletons."""
+    arr = np.asarray(tifffile.imread(str(path)))
+    if arr.ndim == 2:
+        return arr[np.newaxis, ...]
+    if arr.ndim == 3:
+        return arr
+    arr = np.squeeze(arr)
+    if arr.ndim == 2:
+        return arr[np.newaxis, ...]
+    if arr.ndim == 3:
+        return arr
+    raise ValueError(
+        f"TIFF con forma no soportada {arr.shape} en {path}; "
+        "se esperaba un único canal (Z, Y, X)"
+    )
+
+
+def _bit_depth_for_dtype(dtype) -> int:
+    return 8 if np.dtype(dtype) == np.uint8 else 16
+
+
+def _read_tiff_pixel_size(path) -> tuple[Optional[float], Optional[float], str]:
+    """Inverso de _save_tiff: lee XResolution/YResolution si ResolutionUnit=cm.
+
+    µm/px = 1e4 / XResolution (cuando ResolutionUnit == 3 = CENTIMETER).
+    Sanity-check en rango confocal; si falta o es absurdo, devuelve None.
+    """
+    try:
+        with tifffile.TiffFile(str(path)) as tf:
+            tags = tf.pages[0].tags
+            unit_tag = tags.get("ResolutionUnit")
+            xres_tag = tags.get("XResolution")
+            yres_tag = tags.get("YResolution")
+            if xres_tag is None or unit_tag is None:
+                return None, None, "unavailable"
+            if int(getattr(unit_tag, "value", 0) or 0) != 3:  # solo cm es interpretable aquí
+                return None, None, "unavailable"
+
+            def _to_float(v) -> Optional[float]:
+                if isinstance(v, (tuple, list)) and len(v) == 2 and v[1]:
+                    return float(v[0]) / float(v[1])
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            xr = _to_float(getattr(xres_tag, "value", None))
+            yr = _to_float(getattr(yres_tag, "value", None)) if yres_tag is not None else None
+            if not xr or xr <= 0:
+                return None, None, "unavailable"
+            um_x = 1e4 / xr
+            um_y = (1e4 / yr) if (yr and yr > 0) else um_x
+            if not (PIXEL_SIZE_UM_MIN <= um_x <= PIXEL_SIZE_UM_MAX):
+                logger.warning(
+                    "pixel size del TIFF %s fuera de rango [%g, %g] (um_x=%g); no fiable",
+                    path, PIXEL_SIZE_UM_MIN, PIXEL_SIZE_UM_MAX, um_x,
+                )
+                return None, None, "unavailable"
+            return um_x, um_y, "tiff_resolution"
+    except Exception:
+        logger.debug("no se pudo leer pixel size del TIFF %s", path, exc_info=True)
+        return None, None, "unavailable"
+
+
+def _derive_experiment_pocillo(rel_parts: tuple) -> tuple[str, str]:
+    """De la ruta relativa al root deriva (Experimento, Pocillo).
+
+    root/Exp/Pocillo/img.tif → (Exp, Pocillo). Con menos profundidad, degrada.
+    """
+    if len(rel_parts) >= 3:
+        return rel_parts[-3], rel_parts[-2]
+    if len(rel_parts) == 2:
+        return "Experimento", rel_parts[-2]
+    return "Experimento", "General"
+
+
+def scan_tif_folder(input_dir: str, recurse: bool = True) -> TifScan:
+    """Inventaría los TIFFs bajo input_dir y deriva experimento/pocillo/imagen/canal.
+
+    No lee píxeles ni calcula hashes (barato, apto para preview de UI).
+    """
+    root = Path(input_dir)
+    if recurse:
+        candidates = [p for p in root.rglob("*") if p.is_file()]
+    else:
+        candidates = [p for p in root.iterdir() if p.is_file()]
+
+    records: list = []
+    experiments: set = set()
+    pocillos: set = set()
+    images: set = set()
+    raw_channels: set = set()
+
+    for f in sorted(candidates, key=lambda p: _natural_key(str(p))):
+        if f.suffix.lower() not in _TIF_SUFFIXES:
+            continue
+        if f.name == "_manifest.json":
+            continue
+        rel = f.relative_to(root)
+        experiment, pocillo = _derive_experiment_pocillo(rel.parts)
+        image_stem, raw_channel = _parse_image_and_channel(f.stem)
+        records.append({
+            "path": str(f),
+            "rel": str(rel),
+            "experiment": experiment,
+            "pocillo": pocillo,
+            "image_stem": image_stem,
+            "raw_channel": raw_channel,
+        })
+        experiments.add(experiment)
+        pocillos.add((experiment, pocillo))
+        images.add((experiment, pocillo, image_stem))
+        if raw_channel is not None:
+            raw_channels.add(raw_channel)
+
+    return TifScan(
+        input_dir=str(root),
+        files=records,
+        n_experiments=len(experiments),
+        n_pocillos=len(pocillos),
+        n_images=len(images),
+        n_files=len(records),
+        raw_channels=sorted(raw_channels),
+    )
+
+
+def convert_tif_folder(
+    opts: TifFolderOptions,
+    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+) -> dict:
+    """Convierte TIFFs de un árbol Experimento/Pocillo/*.tif a MIP.
+
+    Salida byte-idéntica en formato a LIF→MIP: {out}/{Exp}/{Pocillo}/
+    "{base} - Image{NNN} - C={c}.tif" (canal 0-indexado) + _manifest.json.
+    """
+    scan = scan_tif_folder(opts.input_dir, recurse=opts.recurse)
+    if scan.n_files == 0:
+        raise ValueError(f"No se encontraron TIFFs (.tif/.tiff) bajo {opts.input_dir}")
+
+    # Normaliza el canal crudo a 0-based restando el mínimo encontrado
+    # (robusto a datos 1-based c1,c2,c3 → 0,1,2 y a 0-based c0,c1 → 0,1).
+    raw_present = [r for r in scan.raw_channels if r is not None]
+    min_raw = min(raw_present) if raw_present else 0
+
+    def ch0(raw: Optional[int]) -> int:
+        return 0 if raw is None else max(0, raw - min_raw)
+
+    # Agrupa por (experimento, pocillo)
+    groups: dict = {}
+    for rec in scan.files:
+        groups.setdefault((rec["experiment"], rec["pocillo"]), []).append(rec)
+
+    total = scan.n_files
+    done = 0
+    details: list = []
+    pocillos_written = 0
+
+    for (experiment, pocillo), recs in groups.items():
+        # Índice de imagen (1-based) por stem distinto, en orden natural
+        image_stems = sorted({r["image_stem"] for r in recs}, key=_natural_key)
+        image_index = {stem: i for i, stem in enumerate(image_stems)}
+
+        base = opts.base_name or sanitize_filename(pocillo)
+        exp_safe = sanitize_filename(experiment)
+        pocillo_safe = sanitize_filename(pocillo)
+        output_root = Path(opts.output_dir) / exp_safe / pocillo_safe
+        output_root.mkdir(parents=True, exist_ok=True)
+
+        manifest_files: list = []
+        per_pocillo_files: list = []
+
+        for rec in sorted(recs, key=lambda r: (_natural_key(r["image_stem"]), ch0(r["raw_channel"]))):
+            src = rec["path"]
+            img_idx0 = image_index[rec["image_stem"]]
+            image_label = f"Image{img_idx0 + 1:03d}"
+            channel0 = ch0(rec["raw_channel"])
+
+            stack = _read_tiff_zstack(src)
+            mip = project_mip(stack)
+            bd = _bit_depth_for_dtype(stack.dtype)
+            um_x, um_y, px_source = _read_tiff_pixel_size(src)
+
+            fname = bioformats_channel_filename(base, img_idx0, channel0)
+            _save_tiff(
+                output_root / fname, mip, bd,
+                pixel_size_um=um_x,
+                pixel_size_um_y=um_y,
+            )
+
+            manifest_files.append({
+                "series_index": img_idx0,
+                "image_label": image_label,
+                "channel": channel0,
+                "lut_name": "",
+                "filename": fname,
+                "pixel_size_um": um_x,
+                "pixel_size_um_y": um_y,
+                "pixel_size_source": px_source,
+                "source_tif": rec["rel"],
+                "source_sha256": sha256_of_file(src),
+                "source_channel_raw": rec["raw_channel"],
+            })
+            per_pocillo_files.append(fname)
+
+            done += 1
+            if progress_cb is not None:
+                try:
+                    progress_cb(done, total, f"{output_root} · {fname}")
+                except Exception:
+                    pass
+
+        manifest = {
+            "app_version": APP_VERSION,
+            "conversion_mode": "tif_to_mip",
+            "source_filename": base,
+            "source_dir": str(Path(opts.input_dir)),
+            "experiment": experiment,
+            "pocillo": pocillo,
+            "projection": "mip",
+            "excluded_channels": [],
+            "files": manifest_files,
+        }
+        with open(output_root / "_manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        pocillos_written += 1
+        details.append({
+            "experiment": experiment,
+            "pocillo": pocillo,
+            "output_root": str(output_root),
+            "files_written": per_pocillo_files,
+        })
+
+    return {
+        "input_dir": str(Path(opts.input_dir)),
+        "output_dir": str(Path(opts.output_dir)),
+        "experiments_written": len({d["experiment"] for d in details}),
+        "pocillos_written": pocillos_written,
+        "files_written": done,
         "details": details,
     }
