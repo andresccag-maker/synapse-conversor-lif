@@ -604,20 +604,56 @@ def _derive_experiment_pocillo(rel_parts: tuple) -> tuple[str, str]:
     return "Experimento", "General"
 
 
+# Naming canónico (salida de LIF→TIF / del worker): "{base} - Image{NNN} - C={c}.tif".
+# Es lo que el usuario ya tiene; en ese caso se CONSERVA el nombre y solo se hace MIP.
+_CANONICAL_TIF_RE = re.compile(r"^(?P<base>.+) - Image(?P<img>\d+) - C=(?P<ch>\d+)$")
+
+
+def _parse_tif_stem(stem: str) -> dict:
+    """Clasifica el nombre de un TIFF de entrada.
+
+    - canónico  "{base} - Image{NNN} - C={c}"  → se conserva (canal = C ya 0-indexado).
+    - sufijo    "..._c{N}"                       → se re-deriva al naming del worker.
+    - llano     (sin canal)                      → 1 canal, imagen = stem completo.
+    """
+    m = _CANONICAL_TIF_RE.match(stem)
+    if m:
+        img = int(m.group("img"))
+        ch = int(m.group("ch"))
+        return {
+            "canonical": True,
+            "image_key": f"Image{img:03d}",
+            "image_label": f"Image{img:03d}",
+            "channel": ch,
+            "raw_channel": ch,
+            "image_stem": stem,
+        }
+    image_stem, raw_channel = _parse_image_and_channel(stem)
+    return {
+        "canonical": False,
+        "image_key": image_stem,
+        "image_label": None,
+        "channel": None,
+        "raw_channel": raw_channel,
+        "image_stem": image_stem,
+    }
+
+
 def scan_tif_folder(input_dir: str, recurse: bool = True) -> TifScan:
-    """Inventaría los TIFFs bajo input_dir y deriva experimento/pocillo/imagen/canal.
+    """Inventaría los TIFFs bajo input_dir (estructura, imágenes, canales).
 
     No lee píxeles ni calcula hashes (barato, apto para preview de UI).
     """
     root = Path(input_dir)
+    if not root.exists():
+        return TifScan(input_dir=str(root))
     if recurse:
         candidates = [p for p in root.rglob("*") if p.is_file()]
     else:
         candidates = [p for p in root.iterdir() if p.is_file()]
 
     records: list = []
-    experiments: set = set()
-    pocillos: set = set()
+    folders: set = set()
     images: set = set()
     raw_channels: set = set()
 
@@ -627,28 +663,31 @@ def scan_tif_folder(input_dir: str, recurse: bool = True) -> TifScan:
         if f.name == "_manifest.json":
             continue
         rel = f.relative_to(root)
-        experiment, pocillo = _derive_experiment_pocillo(rel.parts)
-        image_stem, raw_channel = _parse_image_and_channel(f.stem)
+        rel_parent = str(rel.parent)  # "." si el fichero está en la raíz elegida
+        info = _parse_tif_stem(f.stem)
         records.append({
             "path": str(f),
             "rel": str(rel),
-            "experiment": experiment,
-            "pocillo": pocillo,
-            "image_stem": image_stem,
-            "raw_channel": raw_channel,
+            "rel_parent": rel_parent,
+            "name": f.name,
+            "canonical": info["canonical"],
+            "image_key": info["image_key"],
+            "image_label": info["image_label"],
+            "channel": info["channel"],
+            "image_stem": info["image_stem"],
+            "raw_channel": info["raw_channel"],
         })
-        experiments.add(experiment)
-        pocillos.add((experiment, pocillo))
-        images.add((experiment, pocillo, image_stem))
-        if raw_channel is not None:
-            raw_channels.add(raw_channel)
+        folders.add(rel_parent)
+        images.add((rel_parent, info["image_key"]))
+        if info["raw_channel"] is not None:
+            raw_channels.add(info["raw_channel"])
 
     return TifScan(
         input_dir=str(root),
         files=records,
-        n_experiments=len(experiments),
-        n_pocillos=len(pocillos),
-        n_images=len(images),
+        n_experiments=len(folders),       # nº de carpetas con TIFFs (pocillos)
+        n_pocillos=len(folders),
+        n_images=len(images),             # distintas imágenes (Image{NNN} / stem)
         n_files=len(records),
         raw_channels=sorted(raw_channels),
     )
@@ -658,59 +697,62 @@ def convert_tif_folder(
     opts: TifFolderOptions,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
-    """Convierte TIFFs de un árbol Experimento/Pocillo/*.tif a MIP.
+    """Hace el MIP de cada TIFF (Z-stack) bajo input_dir, ESPEJANDO la estructura
+    de carpetas en output_dir.
 
-    Salida byte-idéntica en formato a LIF→MIP: {out}/{Exp}/{Pocillo}/
-    "{base} - Image{NNN} - C={c}.tif" (canal 0-indexado) + _manifest.json.
+    - Si el nombre ya es canónico ("{base} - Image{NNN} - C={c}.tif") se CONSERVA
+      (solo cambia el contenido: Z-stack → 1 plano MIP).
+    - Si es estilo "..._c{N}" se re-deriva al naming del worker.
     """
     scan = scan_tif_folder(opts.input_dir, recurse=opts.recurse)
     if scan.n_files == 0:
         raise ValueError(f"No se encontraron TIFFs (.tif/.tiff) bajo {opts.input_dir}")
 
-    # Normaliza el canal crudo a 0-based restando el mínimo encontrado
-    # (robusto a datos 1-based c1,c2,c3 → 0,1,2 y a 0-based c0,c1 → 0,1).
-    raw_present = [r for r in scan.raw_channels if r is not None]
-    min_raw = min(raw_present) if raw_present else 0
-
-    def ch0(raw: Optional[int]) -> int:
-        return 0 if raw is None else max(0, raw - min_raw)
-
-    # Agrupa por (experimento, pocillo)
+    # Agrupa por carpeta relativa (cada pocillo se procesa por separado).
     groups: dict = {}
     for rec in scan.files:
-        groups.setdefault((rec["experiment"], rec["pocillo"]), []).append(rec)
+        groups.setdefault(rec["rel_parent"], []).append(rec)
 
     total = scan.n_files
     done = 0
     details: list = []
-    pocillos_written = 0
+    folders_written = 0
 
-    for (experiment, pocillo), recs in groups.items():
-        # Índice de imagen (1-based) por stem distinto, en orden natural
-        image_stems = sorted({r["image_stem"] for r in recs}, key=_natural_key)
-        image_index = {stem: i for i, stem in enumerate(image_stems)}
-
-        base = opts.base_name or sanitize_filename(pocillo)
-        exp_safe = sanitize_filename(experiment)
-        pocillo_safe = sanitize_filename(pocillo)
-        output_root = Path(opts.output_dir) / exp_safe / pocillo_safe
+    for rel_parent, recs in groups.items():
+        # Espeja la estructura: si el TIFF está en la raíz elegida, va directo a
+        # output_dir; si está en subcarpeta (pocillo), se replica esa subcarpeta.
+        output_root = Path(opts.output_dir) if rel_parent == "." else Path(opts.output_dir) / rel_parent
         output_root.mkdir(parents=True, exist_ok=True)
 
+        # Para los ficheros NO canónicos (_cN): re-derivar índice de imagen y
+        # normalizar canal a 0-based, dentro de esta carpeta.
+        noncanon = [r for r in recs if not r["canonical"]]
+        raw_present = [r["raw_channel"] for r in noncanon if r["raw_channel"] is not None]
+        min_raw = min(raw_present) if raw_present else 0
+        image_stems = sorted({r["image_stem"] for r in noncanon}, key=_natural_key)
+        image_index = {stem: i for i, stem in enumerate(image_stems)}
+        base = opts.base_name or sanitize_filename(Path(rel_parent).name or "tif")
+
         manifest_files: list = []
-        per_pocillo_files: list = []
+        per_folder_files: list = []
 
-        for rec in sorted(recs, key=lambda r: (_natural_key(r["image_stem"]), ch0(r["raw_channel"]))):
+        for rec in sorted(recs, key=lambda r: (_natural_key(r["image_key"]), r["raw_channel"] if r["raw_channel"] is not None else -1)):
             src = rec["path"]
-            img_idx0 = image_index[rec["image_stem"]]
-            image_label = f"Image{img_idx0 + 1:03d}"
-            channel0 = ch0(rec["raw_channel"])
-
             stack = _read_tiff_zstack(src)
             mip = project_mip(stack)
             bd = _bit_depth_for_dtype(stack.dtype)
             um_x, um_y, px_source = _read_tiff_pixel_size(src)
 
-            fname = bioformats_channel_filename(base, img_idx0, channel0)
+            if rec["canonical"]:
+                fname = rec["name"]               # conservar nombre canónico
+                channel = rec["channel"]
+                image_label = rec["image_label"]
+            else:
+                img_idx0 = image_index[rec["image_stem"]]
+                channel = 0 if rec["raw_channel"] is None else max(0, rec["raw_channel"] - min_raw)
+                image_label = f"Image{img_idx0 + 1:03d}"
+                fname = bioformats_channel_filename(base, img_idx0, channel)
+
             _save_tiff(
                 output_root / fname, mip, bd,
                 pixel_size_um=um_x,
@@ -718,9 +760,8 @@ def convert_tif_folder(
             )
 
             manifest_files.append({
-                "series_index": img_idx0,
                 "image_label": image_label,
-                "channel": channel0,
+                "channel": channel,
                 "lut_name": "",
                 "filename": fname,
                 "pixel_size_um": um_x,
@@ -728,9 +769,9 @@ def convert_tif_folder(
                 "pixel_size_source": px_source,
                 "source_tif": rec["rel"],
                 "source_sha256": sha256_of_file(src),
-                "source_channel_raw": rec["raw_channel"],
+                "preserved_name": rec["canonical"],
             })
-            per_pocillo_files.append(fname)
+            per_folder_files.append(fname)
 
             done += 1
             if progress_cb is not None:
@@ -742,10 +783,8 @@ def convert_tif_folder(
         manifest = {
             "app_version": APP_VERSION,
             "conversion_mode": "tif_to_mip",
-            "source_filename": base,
             "source_dir": str(Path(opts.input_dir)),
-            "experiment": experiment,
-            "pocillo": pocillo,
+            "folder": rel_parent,
             "projection": "mip",
             "excluded_channels": [],
             "files": manifest_files,
@@ -753,19 +792,18 @@ def convert_tif_folder(
         with open(output_root / "_manifest.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-        pocillos_written += 1
+        folders_written += 1
         details.append({
-            "experiment": experiment,
-            "pocillo": pocillo,
+            "folder": rel_parent,
             "output_root": str(output_root),
-            "files_written": per_pocillo_files,
+            "files_written": per_folder_files,
         })
 
     return {
         "input_dir": str(Path(opts.input_dir)),
         "output_dir": str(Path(opts.output_dir)),
-        "experiments_written": len({d["experiment"] for d in details}),
-        "pocillos_written": pocillos_written,
+        "experiments_written": folders_written,
+        "pocillos_written": folders_written,
         "files_written": done,
         "details": details,
     }
