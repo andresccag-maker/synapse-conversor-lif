@@ -3,6 +3,31 @@
 Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [0.4.0] — 2026-06-19
+
+### Added
+- **Nuevo modo de conversión TIF → MIP (lote)**: convierte TIFFs ya exportados
+  (un canal por fichero, Z-stack multipágina) a MIP sin volver al `.lif`. Se
+  elige una carpeta raíz con estructura `Experimento/Pocillo/*.tif` y se genera
+  el MIP de cada canal de cada imagen, espejando la estructura de carpetas.
+  - Núcleo `core.py`: `scan_tif_folder`, `convert_tif_folder`, `_read_tiff_zstack`,
+    `_read_tiff_pixel_size`, `TifFolderOptions`/`TifScan`. Reutiliza `project_mip`,
+    `_save_tiff` y `bioformats_channel_filename` → la salida es **byte-idéntica en
+    formato** a LIF→MIP (mismo naming `{base} - Image{NNN} - C={c}.tif`, canal
+    0-indexado, + `_manifest.json`). El canal se deriva del sufijo `_cN` y se
+    **normaliza a 0-based** (robusto a datos 1-based). El pixel size se preserva
+    leyendo los tags de resolución del TIFF de entrada.
+  - CLI `convert_cli.py`: flag `--tif-folder DIR` (+ `--base-name`), retrocompatible.
+  - App de escritorio: selector de modo `LIF → TIFF/MIP` ↔ `TIF → MIP (lote)`,
+    selector de carpeta y resumen del escaneo.
+- **Build de Linux** (x86_64 + aarch64) vía PyInstaller + AppImage (`build_linux.sh`,
+  `packaging/linux/`), con jobs de CI `build-linux-x86_64` (`ubuntu-latest`) y
+  `build-linux-arm64` (`ubuntu-24.04-arm`). La landing añade botón de descarga Linux.
+
+### Changed
+- `core.APP_VERSION`: 0.3.1 → 0.4.0.
+- Pill de versión de la UI corregido (estaba en 0.3.0).
+
 ## [0.3.1] — 2026-06-04
 
 ### Added
