@@ -62,7 +62,8 @@ def test_scan_counts_and_canonical(tmp_path):
     assert scan.n_images == 2              # Image003, Image022
     assert sorted(scan.raw_channels) == [0, 1]
     rec = scan.files[0]
-    assert rec["canonical"] is True
+    assert rec["channel"] in (0, 1)
+    assert rec["image_label"] in ("Image003", "Image022")
     assert rec["rel_parent"] == "POCILLO_1"
 
 
@@ -103,18 +104,31 @@ def test_canonical_preserved_and_mirrored(tmp_path):
     assert summary["pocillos_written"] == 1
 
 
-def test_channel_suffix_rederived(tmp_path):
-    """Entrada estilo "..._c{N}" (no canónica) → se re-deriva al naming worker."""
+def test_any_naming_preserved(tmp_path):
+    """Cualquier convención de nombre se CONSERVA (el MIP no renombra)."""
     root = tmp_path / "in"
-    for img in ("img1",):
-        for ch in (1, 2):
-            _write_zstack(root / "POCILLO_1" / f"{img}_c{ch}.tif")
+    _write_zstack(root / "POCILLO_1" / "img1_c1.tif")
+    _write_zstack(root / "POCILLO_1" / "img1_c2.tif")
     out = tmp_path / "out"
     core.convert_tif_folder(core.TifFolderOptions(input_dir=str(root), output_dir=str(out)))
     names = sorted(p.name for p in (out / "POCILLO_1").iterdir() if p.suffix == ".tif")
-    # base = nombre de la carpeta; canal _c1→C=0, _c2→C=1
-    assert "POCILLO_1 - Image001 - C=0.tif" in names
-    assert "POCILLO_1 - Image001 - C=1.tif" in names
+    assert names == ["img1_c1.tif", "img1_c2.tif"]
+
+
+def test_prefix_channel_preserved(tmp_path):
+    """Naming EXP116 (prefijo C{c}-): nombre conservado; canal/imagen en manifest
+    (canal del prefijo, NO todo 0)."""
+    root = tmp_path / "in"
+    for ch in (1, 2, 4):
+        _write_zstack(root / "POCILLO_1" / f"C{ch}-Exp116 Pocillo1.lif - Image003.tif")
+    out = tmp_path / "out"
+    core.convert_tif_folder(core.TifFolderOptions(input_dir=str(root), output_dir=str(out)))
+    names = sorted(p.name for p in (out / "POCILLO_1").iterdir() if p.suffix == ".tif")
+    assert "C1-Exp116 Pocillo1.lif - Image003.tif" in names
+    assert "C4-Exp116 Pocillo1.lif - Image003.tif" in names
+    m = json.loads((out / "POCILLO_1" / "_manifest.json").read_text(encoding="utf-8"))
+    assert sorted(f["channel"] for f in m["files"]) == [1, 2, 4]
+    assert all(f["image_label"] == "Image003" for f in m["files"])
 
 
 def test_mirror_multiple_pocillos(tmp_path):

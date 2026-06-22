@@ -604,38 +604,39 @@ def _derive_experiment_pocillo(rel_parts: tuple) -> tuple[str, str]:
     return "Experimento", "General"
 
 
-# Naming canónico (salida de LIF→TIF / del worker): "{base} - Image{NNN} - C={c}.tif".
-# Es lo que el usuario ya tiene; en ese caso se CONSERVA el nombre y solo se hace MIP.
-_CANONICAL_TIF_RE = re.compile(r"^(?P<base>.+) - Image(?P<img>\d+) - C=(?P<ch>\d+)$")
+# Detección (mejor-esfuerzo) de canal e imagen en el nombre — SOLO para metadata
+# del manifest y el conteo. El nombre del fichero SIEMPRE se conserva en la salida
+# (el MIP no debe renombrar). Reconoce las convenciones reales del usuario:
+#   - sufijo:  "{base} - Image{NNN} - C={c}.tif"   (EXP109 / salida del worker)
+#   - prefijo: "C{c}-{base} - Image{NNN}.tif"      (EXP116)
+#   - sufijo:  "..._c{N}.tif"
+_CHAN_SUFFIX_RE = re.compile(r" - Image(\d+) - C=(\d+)$")
+_CHAN_PREFIX_RE = re.compile(r"^C(\d+)[ _-]")
+_IMAGE_LABEL_RE = re.compile(r"[Ii]mage[n]?\s*(\d+)")
 
 
 def _parse_tif_stem(stem: str) -> dict:
-    """Clasifica el nombre de un TIFF de entrada.
-
-    - canónico  "{base} - Image{NNN} - C={c}"  → se conserva (canal = C ya 0-indexado).
-    - sufijo    "..._c{N}"                       → se re-deriva al naming del worker.
-    - llano     (sin canal)                      → 1 canal, imagen = stem completo.
-    """
-    m = _CANONICAL_TIF_RE.match(stem)
+    """Extrae canal e imagen del nombre (mejor-esfuerzo, solo metadata)."""
+    channel = None
+    image_label = None
+    m = _CHAN_SUFFIX_RE.search(stem)
     if m:
-        img = int(m.group("img"))
-        ch = int(m.group("ch"))
-        return {
-            "canonical": True,
-            "image_key": f"Image{img:03d}",
-            "image_label": f"Image{img:03d}",
-            "channel": ch,
-            "raw_channel": ch,
-            "image_stem": stem,
-        }
-    image_stem, raw_channel = _parse_image_and_channel(stem)
+        channel = int(m.group(2))
+        image_label = f"Image{int(m.group(1)):03d}"
+    else:
+        mp = _CHAN_PREFIX_RE.match(stem)
+        if mp:
+            channel = int(mp.group(1))
+        else:
+            _, raw = _parse_image_and_channel(stem)  # "..._c{N}"
+            channel = raw
+        mi = _IMAGE_LABEL_RE.search(stem)
+        if mi:
+            image_label = f"Image{int(mi.group(1)):03d}"
     return {
-        "canonical": False,
-        "image_key": image_stem,
-        "image_label": None,
-        "channel": None,
-        "raw_channel": raw_channel,
-        "image_stem": image_stem,
+        "channel": channel,
+        "image_label": image_label,
+        "image_key": image_label or stem,
     }
 
 
@@ -670,17 +671,14 @@ def scan_tif_folder(input_dir: str, recurse: bool = True) -> TifScan:
             "rel": str(rel),
             "rel_parent": rel_parent,
             "name": f.name,
-            "canonical": info["canonical"],
-            "image_key": info["image_key"],
-            "image_label": info["image_label"],
             "channel": info["channel"],
-            "image_stem": info["image_stem"],
-            "raw_channel": info["raw_channel"],
+            "image_label": info["image_label"],
+            "image_key": info["image_key"],
         })
         folders.add(rel_parent)
         images.add((rel_parent, info["image_key"]))
-        if info["raw_channel"] is not None:
-            raw_channels.add(info["raw_channel"])
+        if info["channel"] is not None:
+            raw_channels.add(info["channel"])
 
     return TifScan(
         input_dir=str(root),
@@ -697,12 +695,11 @@ def convert_tif_folder(
     opts: TifFolderOptions,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
-    """Hace el MIP de cada TIFF (Z-stack) bajo input_dir, ESPEJANDO la estructura
-    de carpetas en output_dir.
+    """Hace el MIP de cada TIFF (Z-stack) bajo input_dir, CONSERVANDO el nombre del
+    fichero y ESPEJANDO la estructura de carpetas en output_dir.
 
-    - Si el nombre ya es canónico ("{base} - Image{NNN} - C={c}.tif") se CONSERVA
-      (solo cambia el contenido: Z-stack → 1 plano MIP).
-    - Si es estilo "..._c{N}" se re-deriva al naming del worker.
+    El MIP no renombra: solo colapsa el Z-stack a 1 plano. Así funciona con
+    cualquier convención de nombres ("- C={c}", "C{c}-...", "..._c{N}", etc.).
     """
     scan = scan_tif_folder(opts.input_dir, recurse=opts.recurse)
     if scan.n_files == 0:
@@ -724,34 +721,17 @@ def convert_tif_folder(
         output_root = Path(opts.output_dir) if rel_parent == "." else Path(opts.output_dir) / rel_parent
         output_root.mkdir(parents=True, exist_ok=True)
 
-        # Para los ficheros NO canónicos (_cN): re-derivar índice de imagen y
-        # normalizar canal a 0-based, dentro de esta carpeta.
-        noncanon = [r for r in recs if not r["canonical"]]
-        raw_present = [r["raw_channel"] for r in noncanon if r["raw_channel"] is not None]
-        min_raw = min(raw_present) if raw_present else 0
-        image_stems = sorted({r["image_stem"] for r in noncanon}, key=_natural_key)
-        image_index = {stem: i for i, stem in enumerate(image_stems)}
-        base = opts.base_name or sanitize_filename(Path(rel_parent).name or "tif")
-
         manifest_files: list = []
         per_folder_files: list = []
 
-        for rec in sorted(recs, key=lambda r: (_natural_key(r["image_key"]), r["raw_channel"] if r["raw_channel"] is not None else -1)):
+        for rec in sorted(recs, key=lambda r: _natural_key(r["name"])):
             src = rec["path"]
             stack = _read_tiff_zstack(src)
             mip = project_mip(stack)
             bd = _bit_depth_for_dtype(stack.dtype)
             um_x, um_y, px_source = _read_tiff_pixel_size(src)
 
-            if rec["canonical"]:
-                fname = rec["name"]               # conservar nombre canónico
-                channel = rec["channel"]
-                image_label = rec["image_label"]
-            else:
-                img_idx0 = image_index[rec["image_stem"]]
-                channel = 0 if rec["raw_channel"] is None else max(0, rec["raw_channel"] - min_raw)
-                image_label = f"Image{img_idx0 + 1:03d}"
-                fname = bioformats_channel_filename(base, img_idx0, channel)
+            fname = rec["name"]   # SIEMPRE conservar el nombre de entrada
 
             _save_tiff(
                 output_root / fname, mip, bd,
@@ -760,16 +740,15 @@ def convert_tif_folder(
             )
 
             manifest_files.append({
-                "image_label": image_label,
-                "channel": channel,
-                "lut_name": "",
+                "image_label": rec["image_label"],
+                "channel": rec["channel"],
                 "filename": fname,
                 "pixel_size_um": um_x,
                 "pixel_size_um_y": um_y,
                 "pixel_size_source": px_source,
                 "source_tif": rec["rel"],
                 "source_sha256": sha256_of_file(src),
-                "preserved_name": rec["canonical"],
+                "preserved_name": True,
             })
             per_folder_files.append(fname)
 
