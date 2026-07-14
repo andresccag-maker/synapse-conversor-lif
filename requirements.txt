@@ -3,3 +3,7 @@ numpy>=1.24
 tifffile>=2023.7.10
 pillow>=9.5
 pywebview>=4.4
+# Lector Nikon ND2 (wheel pure-python, aarch64 OK). Pin exacto: arrastra
+# dask/ome-types/resource-backed-dask-array (todas con wheels aarch64). El extra
+# `legacy` (imagecodecs, JPEG2000) NO se instala salvo que un ND2 antiguo lo exija.
+nd2==0.11.3

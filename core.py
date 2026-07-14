@@ -19,7 +19,7 @@ import numpy as np
 import tifffile
 from PIL import Image
 
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.5.0"
 
 logger = logging.getLogger(__name__)
 

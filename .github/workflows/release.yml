@@ -43,6 +43,14 @@ jobs:
         env:
           ARCH_SUFFIX: arm64
         run: bash build_macos.sh
+      - name: Self-test ND2 (binario congelado)
+        run: |
+          BIN="dist/SYN APSE — Conversor LIF.app/Contents/MacOS/SYN APSE — Conversor LIF"
+          if [ -f tests/fixtures/sample.nd2 ]; then
+            "$BIN" --self-test-nd2 tests/fixtures/sample.nd2
+          else
+            echo "::warning::sin tests/fixtures/sample.nd2 — self-test ND2 omitido (pendiente fixture real)"
+          fi
       - name: Locate DMG
         id: find_dmg
         run: |
@@ -79,6 +87,14 @@ jobs:
         env:
           ARCH_SUFFIX: x86_64
         run: bash build_macos.sh
+      - name: Self-test ND2 (binario congelado)
+        run: |
+          BIN="dist/SYN APSE — Conversor LIF.app/Contents/MacOS/SYN APSE — Conversor LIF"
+          if [ -f tests/fixtures/sample.nd2 ]; then
+            "$BIN" --self-test-nd2 tests/fixtures/sample.nd2
+          else
+            echo "::warning::sin tests/fixtures/sample.nd2 — self-test ND2 omitido (pendiente fixture real)"
+          fi
       - name: Locate DMG
         id: find_dmg
         run: |
@@ -123,6 +139,14 @@ jobs:
         env:
           ARCH_SUFFIX: x86_64
         run: bash build_linux.sh
+      - name: Self-test ND2 (binario congelado)
+        run: |
+          BIN="dist/SYN_APSE_Conversor_LIF/SYN_APSE_Conversor_LIF"
+          if [ -f tests/fixtures/sample.nd2 ]; then
+            "$BIN" --self-test-nd2 tests/fixtures/sample.nd2
+          else
+            echo "::warning::sin tests/fixtures/sample.nd2 — self-test ND2 omitido (pendiente fixture real)"
+          fi
       - name: Check artifacts
         run: |
           ls -la dist/
@@ -161,6 +185,14 @@ jobs:
         env:
           ARCH_SUFFIX: arm64
         run: bash build_linux.sh
+      - name: Self-test ND2 (binario congelado)
+        run: |
+          BIN="dist/SYN_APSE_Conversor_LIF/SYN_APSE_Conversor_LIF"
+          if [ -f tests/fixtures/sample.nd2 ]; then
+            "$BIN" --self-test-nd2 tests/fixtures/sample.nd2
+          else
+            echo "::warning::sin tests/fixtures/sample.nd2 — self-test ND2 omitido (pendiente fixture real)"
+          fi
       - name: Check artifacts
         run: |
           ls -la dist/
@@ -189,6 +221,16 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: ./build_windows.ps1
+      - name: Self-test ND2 (binario congelado)
+        shell: pwsh
+        run: |
+          $bin = "dist\SYN_APSE_Conversor_LIF\SYN_APSE_Conversor_LIF.exe"
+          if (Test-Path tests\fixtures\sample.nd2) {
+            & $bin --self-test-nd2 tests\fixtures\sample.nd2
+            if ($LASTEXITCODE -ne 0) { throw "Self-test ND2 falló (exit $LASTEXITCODE)" }
+          } else {
+            Write-Host "::warning::sin tests/fixtures/sample.nd2 - self-test ND2 omitido (pendiente fixture real)"
+          }
       - name: Locate installer
         id: find_exe
         shell: pwsh

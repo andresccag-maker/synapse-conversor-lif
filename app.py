@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import traceback
 from dataclasses import asdict
@@ -315,6 +316,14 @@ class Api:
 
 
 def main() -> None:
+    # Autocomprobación del lector ND2 dentro del binario CONGELADO (usada en CI):
+    #   ./SYN_APSE_Conversor_LIF --self-test-nd2 <fixture.nd2>
+    # Se intercepta ANTES de abrir la ventana; delega en el CLI headless y sale
+    # con su código (0 OK / 1 fallo). No abre GUI.
+    if "--self-test-nd2" in sys.argv:
+        import convert_cli
+        raise SystemExit(convert_cli.main(sys.argv[1:]))
+
     api = Api()
     here = Path(__file__).resolve().parent
     index_path = str(here / "web" / "index.html")
