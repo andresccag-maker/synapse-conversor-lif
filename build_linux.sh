@@ -66,6 +66,13 @@ pyinstaller \
   --collect-all webview \
   --collect-all readlif \
   --collect-all gi \
+  --collect-all nd2 \
+  --collect-all ome_types \
+  --collect-all dask \
+  --collect-all resource_backed_dask_array \
+  --copy-metadata nd2 \
+  --copy-metadata ome-types \
+  --copy-metadata dask \
   --hidden-import appdirs \
   --exclude-module matplotlib \
   --exclude-module tkinter \

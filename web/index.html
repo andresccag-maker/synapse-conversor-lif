@@ -19,7 +19,7 @@
     </div>
   </div>
   <div class="topbar-right">
-    <span class="pill" id="version-pill">v0.4.2</span>
+    <span class="pill" id="version-pill">v0.5.0</span>
   </div>
 </header>
 
@@ -27,6 +27,7 @@
   <p id="hero-text">Leica <code>.lif</code> → TIFFs por canal · procesamiento local, sin subir nada</p>
   <div class="mode-toggle" role="tablist" aria-label="Modo de conversión">
     <button class="mode-btn active" id="mode-lif" type="button" role="tab" aria-selected="true">LIF → TIFF / MIP</button>
+    <button class="mode-btn" id="mode-nd2" type="button" role="tab" aria-selected="false">ND2 → TIFF / MIP</button>
     <button class="mode-btn" id="mode-tif" type="button" role="tab" aria-selected="false">TIF → MIP (lote)</button>
   </div>
 </section>
@@ -93,6 +94,34 @@
           </div>
         </div>
       </div><!-- /#tif-block -->
+
+      <div id="nd2-block" hidden>
+        <div class="dropzone" id="nd2-dropzone">
+          <div class="dropzone-icon" aria-hidden="true">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div class="dropzone-text">
+            <strong>Arrastra un <code>.nd2</code> aquí</strong>
+            <span class="muted">Nikon · o</span>
+          </div>
+          <button class="btn primary" id="btn-pick-nd2">Elegir archivo .nd2…</button>
+        </div>
+
+        <div class="summary" id="nd2-meta" hidden>
+          <div class="summary-row">
+            <span class="summary-label">Archivo</span>
+            <span class="summary-value path" id="nd2-path">—</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Detalle</span>
+            <span class="summary-value" id="nd2-summary"></span>
+          </div>
+        </div>
+      </div><!-- /#nd2-block -->
     </div>
   </section>
 

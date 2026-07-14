@@ -3,6 +3,45 @@
 Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [0.5.0] — sin publicar (pendiente de ND2 real + gate humano de tag)
+
+### Added
+- **Nuevo modo ND2 → TIFF / MIP (microscopía Nikon)**: tercer modo hermano de
+  LIF→MIP y TIF→MIP. Convierte ficheros `.nd2` (cada posición XY = una serie
+  `Image{NNN}`; cada canal 0-indexado en su orden real) a MIP `(1, Y, X)` o
+  Z-stack completo, con **el mismo contrato de salida que LIF→MIP** (naming
+  Bio-Formats `{base}.nd2 - Image{NNN} - C={c}.tif`, estructura aplanada
+  `{Exp}/{Pocillo}/` y `_manifest.json`) → `cell-analyzer-worker` lo consume
+  idéntico. El manifest añade `conversion_mode` (`nd2_to_mip`/`nd2_to_zstack`).
+  - Núcleo `core.py`: `read_nd2_info`, `convert_nd2`, `_open_nd2` (aislado para
+    tests), preflight dimensional con **errores tipados**
+    (`Nd2Error`/`Nd2PreflightError`/`Nd2ReadError`): rechaza time-lapse (T>1),
+    RGB, ejes no soportados y dtype no `uint<=16` (los 12-bit de Nikon se
+    preservan como uint16, sin normalizar). **MIP por streaming plano a plano**
+    (`np.maximum`, memoria ≈ 2 planos); z-stack rechaza salidas > 4 GiB (BigTIFF
+    = decisión humana). Reutiliza `bioformats_channel_filename`/`_save_tiff`/
+    `project_mip`.
+  - CLI `convert_cli.py`: `--nd2 PATH` (excluyente con `.lif`/`--tif-folder`) y
+    `--self-test-nd2 FIXTURE` (autocomprueba el lector ND2 dentro del binario
+    congelado). Errores del preflight traducidos a mensaje legible.
+  - App de escritorio: tercer modo `ND2 → TIFF / MIP` (comparte con LIF la lista
+    de series, chips de exclusión y selector de proyección).
+  - Empaquetado: dependencia `nd2==0.11.3` (wheel pure-python, aarch64 OK) +
+    `--collect-all nd2/ome_types/dask/resource_backed_dask_array` en los builds y
+    self-test del binario congelado por plataforma en CI.
+  - Tests: `tests/test_nd2_to_mip.py` (15 tests con fakes + golden manifest +
+    preflight). 38 tests totales.
+
+### Changed
+- `core.APP_VERSION`: 0.4.2 → 0.5.0. Pill de versión de la UI → v0.5.0.
+- Esta versión **incluye los fixes de 0.4.2** (GTK en Linux + TIF→MIP conserva el
+  nombre) que nunca llegaron a publicarse con tag propio; v0.5.0 los libera.
+
+### Pendiente (gate humano, ver session_log)
+- Validar con ≥1 `.nd2` real: spike de lectura real, fixture `tests/fixtures/
+  sample.nd2` para el self-test de CI, y cross-check del worker. **No taggear
+  v0.5.0 hasta validar.**
+
 ## [0.4.2] — 2026-06-19
 
 ### Fixed
@@ -12,6 +51,11 @@ Versionado siguiendo [SemVer](https://semver.org/lang/es/). Formato basado en
   `--collect-all gi` no empaquetaba nada. Ahora los jobs de Linux usan el Python
   del sistema + `python3-gi`/`python3-gi-cairo` de apt (mismo stack validado en
   la Jetson). Se elimina `generate_icon` en Linux (el icono va commiteado).
+- **TIF→MIP CONSERVA SIEMPRE el nombre y espeja la estructura** (el MIP no
+  renombra; solo colapsa el Z-stack a 1 plano). Funciona con cualquier convención
+  real: sufijo `- C={c}` (EXP109), prefijo `C{c}-...` (EXP116), `..._c{N}`. El
+  canal/imagen se detectan mejor-esfuerzo solo para el manifest. Antes re-derivaba
+  y rompía: con EXP116 (`C1-...Image003.tif`) ponía todo a `C=0` y renumeraba.
 
 ## [0.4.1] — 2026-06-19
 

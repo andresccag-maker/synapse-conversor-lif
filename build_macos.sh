@@ -104,6 +104,13 @@ pyinstaller \
   --clean \
   --collect-all webview \
   --collect-all readlif \
+  --collect-all nd2 \
+  --collect-all ome_types \
+  --collect-all dask \
+  --collect-all resource_backed_dask_array \
+  --copy-metadata nd2 \
+  --copy-metadata ome-types \
+  --copy-metadata dask \
   "${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"}" \
   app.py
 # Nota: la sintaxis "${ARRAY[@]+"${ARRAY[@]}"}" es empty-safe bajo `set -u`
