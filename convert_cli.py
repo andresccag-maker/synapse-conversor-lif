@@ -29,6 +29,57 @@ def _print_info(info) -> None:
         )
 
 
+def _self_test_nd2(fixture: str) -> int:
+    """Autocomprueba que el lector ND2 funciona (incl. dentro del binario congelado).
+
+    Convierte una fixture .nd2 pequeña a MIP en un directorio temporal y valida los
+    TIFF y el _manifest.json. Devuelve 0 si OK, 1 si falla (con diagnóstico). Se usa
+    en CI: "se generó el instalador" no prueba que `nd2` funcione dentro del bundle.
+    """
+    import os
+    import tempfile
+
+    try:
+        info, _ = core.read_nd2_info(fixture, with_previews=False)
+        if info.n_series < 1 or info.series[0].n_channels < 1:
+            print(f"SELF-TEST ND2 FALLO: sin series/canales en {fixture}", file=sys.stderr)
+            return 1
+        with tempfile.TemporaryDirectory() as td:
+            opts = core.ConvertOptions(
+                output_dir=td, experiment="SELFTEST", pocillo="P1",
+                exclude_channels_0based=[], projection="mip",
+            )
+            summary = core.convert_nd2(fixture, opts)
+            with open(summary["manifest_path"], encoding="utf-8") as f:
+                manifest = json.load(f)
+            n_files = len(manifest.get("files", []))
+            tifs = [p for p in os.listdir(summary["output_root"]) if p.endswith(".tif")]
+            ok = (
+                manifest.get("conversion_mode") == "nd2_to_mip"
+                and n_files == len(tifs) == summary["files_written"]
+                and n_files >= 1
+                and all(isinstance(fe.get("channel"), int) for fe in manifest["files"])
+            )
+            if not ok:
+                print(
+                    f"SELF-TEST ND2 FALLO: manifest/TIFF inconsistente "
+                    f"({n_files} en manifest, {len(tifs)} .tif)",
+                    file=sys.stderr,
+                )
+                return 1
+        print(
+            f"SELF-TEST ND2 OK: {info.n_series} serie(s), "
+            f"{info.series[0].n_channels} canal(es); lector `nd2` operativo"
+        )
+        return 0
+    except core.Nd2Error as exc:
+        print(f"SELF-TEST ND2 FALLO (ND2): {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - diagnóstico legible en CI
+        print(f"SELF-TEST ND2 FALLO: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="convert_cli",
@@ -38,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tif-folder",
         help="modo TIF→MIP: carpeta raíz con Experimento/Pocillo/*.tif (Z-stacks por canal)",
+    )
+    parser.add_argument(
+        "--nd2",
+        help="modo ND2→TIFF/MIP: ruta a un archivo .nd2 (microscopía Nikon)",
     )
     parser.add_argument("-o", "--output", help="carpeta de salida")
     parser.add_argument("--experiment", help="nombre del experimento (override sugerencia)")
@@ -57,11 +112,54 @@ def main(argv: list[str] | None = None) -> int:
     proj.add_argument("--mip", action="store_true", help="proyección MIP (por defecto)")
     proj.add_argument("--zstack", action="store_true", help="conservar Z-stack completo")
     parser.add_argument("--info", action="store_true", help="solo imprimir metadatos")
+    parser.add_argument(
+        "--self-test-nd2",
+        metavar="ND2",
+        help="autocomprueba el lector ND2 (incl. binario congelado) sobre una fixture .nd2 y sale",
+    )
 
     args = parser.parse_args(argv)
 
     def cb(done: int, total: int, folder: str) -> None:
         print(f"[{done}/{total}] {folder}")
+
+    # ---- Self-test del lector ND2 (usado por el binario congelado en CI) ----
+    if args.self_test_nd2:
+        return _self_test_nd2(args.self_test_nd2)
+
+    # ---- Modo ND2 → TIFF / MIP (Nikon) ----
+    if args.nd2:
+        if args.lif or args.tif_folder:
+            print("ERROR: usa solo uno de: .lif, --tif-folder o --nd2", file=sys.stderr)
+            return 2
+        try:
+            info, _ = core.read_nd2_info(args.nd2, with_previews=False)
+        except core.Nd2Error as exc:
+            print(f"ERROR ND2: {exc}", file=sys.stderr)
+            return 1
+        _print_info(info)
+        if args.info:
+            return 0
+        if not args.output:
+            print("ERROR: se requiere -o/--output cuando no se pasa --info", file=sys.stderr)
+            return 2
+        projection = "none" if args.zstack else "mip"
+        experiment = args.experiment or info.suggested_experiment
+        pocillo = args.pocillo or info.suggested_pocillo
+        opts = core.ConvertOptions(
+            output_dir=args.output,
+            experiment=experiment,
+            pocillo=pocillo,
+            exclude_channels_0based=list(args.exclude or []),
+            projection=projection,
+        )
+        try:
+            summary = core.convert_nd2(args.nd2, opts, progress_cb=cb)
+        except core.Nd2Error as exc:
+            print(f"ERROR ND2: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
 
     # ---- Modo TIF → MIP ----
     if args.tif_folder:
