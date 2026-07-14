@@ -226,8 +226,12 @@ jobs:
         run: |
           $bin = "dist\SYN_APSE_Conversor_LIF\SYN_APSE_Conversor_LIF.exe"
           if (Test-Path tests\fixtures\sample.nd2) {
-            & $bin --self-test-nd2 tests\fixtures\sample.nd2
-            if ($LASTEXITCODE -ne 0) { throw "Self-test ND2 falló (exit $LASTEXITCODE)" }
+            # El .exe es --windowed (GUI subsystem): `& $bin` NO espera ni propaga
+            # el exit code. Start-Process -Wait -PassThru sí captura .ExitCode.
+            $p = Start-Process -FilePath $bin `
+                   -ArgumentList '--self-test-nd2','tests\fixtures\sample.nd2' `
+                   -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "Self-test ND2 falló (exit $($p.ExitCode))" }
           } else {
             Write-Host "::warning::sin tests/fixtures/sample.nd2 - self-test ND2 omitido (pendiente fixture real)"
           }

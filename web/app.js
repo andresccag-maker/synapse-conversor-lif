@@ -33,8 +33,39 @@ function updateConvertEnabled() {
   el("btn-convert").disabled = !ready;
 }
 
+function resetFlowState() {
+  // Al cambiar de modo, olvida el fichero cargado del flujo anterior: LIF y ND2
+  // COMPARTEN state.info/excluded y los campos experimento/pocillo, así que sin
+  // este reset una conversión podría heredar los parámetros/estructura de otro
+  // fichero (salida mal archivada + exclusión de canal equivocada → datos
+  // incorrectos y silenciosos hacia el worker). La carpeta de salida se conserva.
+  state.info = null;
+  state.excluded = new Set();
+  state.maxChannels = 0;
+  state.lutNames = [];
+  state.lifPath = null;
+  state.nd2Path = null;
+  state.tifDir = null;
+  state.tifScan = null;
+  ["exp", "pocillo", "base-name"].forEach((id) => { const e = el(id); if (e) e.value = ""; });
+  ["lif-meta", "nd2-meta", "tif-meta"].forEach((id) => { const e = el(id); if (e) e.hidden = true; });
+  ["lif-path", "nd2-path", "tif-path"].forEach((id) => { const e = el(id); if (e) e.textContent = "—"; });
+  ["scan-experiments", "scan-pocillos", "scan-images", "scan-files"].forEach(
+    (id) => { const e = el(id); if (e) e.textContent = "0"; },
+  );
+  const chn = el("scan-channels"); if (chn) chn.textContent = "—";
+  const sc = el("series-count"); if (sc) sc.textContent = "";
+  const box = el("result"); if (box) box.hidden = true;
+  el("progress-bar").style.width = "0%";
+  el("progress-text").textContent = "listo";
+  renderChips();
+  renderSeries();
+}
+
 function setMode(mode) {
+  const changed = state.mode !== mode;
   state.mode = mode;
+  if (changed) resetFlowState();
   const isLif = mode === "lif";
   const isNd2 = mode === "nd2";
   const isTif = mode === "tif";
@@ -385,7 +416,12 @@ async function init() {
       el("progress-text").textContent = "listo";
       updateConvertEnabled();
     } catch (err) {
+      // Excepción no-Nd2Error (p. ej. IO al hashear): no dejes el ND2 roto como
+      // "cargado y listo" — limpia el estado para que Convertir quede deshabilitado.
+      state.nd2Path = null;
+      state.info = null;
       handleError({ message: String(err), trace: "" });
+      updateConvertEnabled();
     }
   }
 
