@@ -18,6 +18,7 @@ class Api:
         self._window = None
         self._lif_path: str | None = None
         self._tif_dir: str | None = None
+        self._nd2_path: str | None = None
 
     def set_window(self, window) -> None:
         self._window = window
@@ -37,6 +38,21 @@ class Api:
             return None
         path = result[0] if isinstance(result, (list, tuple)) else result
         self._lif_path = path
+        return path
+
+    def choose_nd2(self):
+        if self._window is None:
+            return None
+        file_types = ("Nikon ND2 (*.nd2)", "Todos los archivos (*.*)")
+        result = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=file_types,
+        )
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        self._nd2_path = path
         return path
 
     def choose_output(self):
@@ -104,6 +120,65 @@ class Api:
                 "trace": traceback.format_exc(),
             })
 
+    # ---------------- inspección ND2 ----------------
+
+    def inspect_nd2(self, path: str):
+        # El preflight dimensional corre dentro de read_nd2_info; si el ND2 no es
+        # convertible (T>1, RGB, eje raro…), devolvemos un error legible en vez de
+        # reventar la promesa del front.
+        try:
+            info, _ = core.read_nd2_info(path, with_previews=False)
+        except core.Nd2Error as exc:
+            return {"error": str(exc)}
+        payload = asdict(info)
+        self._nd2_path = path
+        threading.Thread(
+            target=self._nd2_previews_worker,
+            args=(path,),
+            daemon=True,
+        ).start()
+        return payload
+
+    def _nd2_previews_worker(self, path: str) -> None:
+        try:
+            f = core._open_nd2(path)
+            try:
+                sizes = core._nd2_sizes(f)
+                n_pos = int(sizes.get("P", 1) or 1)
+                n_c = int(sizes.get("C", 1) or 1)
+                axes = core._nd2_axis_order(f)
+                lazy = core._nd2_to_lazy(f)
+                names = core._nd2_channel_names(f, n_c)
+                for pos in range(n_pos):
+                    for c in range(n_c):
+                        lut_name = names[c] if c < len(names) else ""
+                        rgb = tuple(core._lut_rgb_for(lut_name))
+                        try:
+                            stack = core._read_nd2_stack(lazy, axes, pos, c)
+                            uri = core.make_preview_png_b64(stack, rgb=rgb)
+                            self._emit("preview", {
+                                "series": pos,
+                                "channel": c,
+                                "uri": uri,
+                                "lut_name": lut_name,
+                            })
+                        except Exception as exc:
+                            self._emit("preview", {
+                                "series": pos,
+                                "channel": c,
+                                "uri": None,
+                                "lut_name": lut_name,
+                                "error": str(exc),
+                            })
+                self._emit("previews_done", {})
+            finally:
+                core._nd2_close(f)
+        except Exception as exc:
+            self._emit("error", {
+                "message": f"Previews ND2 failed: {exc}",
+                "trace": traceback.format_exc(),
+            })
+
     # ---------------- conversion ----------------
 
     def run_convert(self, opts_dict: dict):
@@ -136,6 +211,47 @@ class Api:
 
             summary = core.convert(path, opts, progress_cb=cb)
             self._emit("done", summary)
+        except Exception as exc:
+            self._emit("error", {
+                "message": str(exc),
+                "trace": traceback.format_exc(),
+            })
+
+    # ---------------- conversión ND2 ----------------
+
+    def run_convert_nd2(self, opts_dict: dict):
+        if not self._nd2_path:
+            self._emit("error", {"message": "No hay .nd2 seleccionado", "trace": ""})
+            return False
+        path = self._nd2_path
+        threading.Thread(
+            target=self._convert_nd2_worker,
+            args=(path, opts_dict),
+            daemon=True,
+        ).start()
+        return True
+
+    def _convert_nd2_worker(self, path: str, opts_dict: dict) -> None:
+        try:
+            opts = core.ConvertOptions(
+                output_dir=opts_dict["output_dir"],
+                experiment=opts_dict.get("experiment", "Experimento"),
+                pocillo=opts_dict.get("pocillo", "General"),
+                exclude_channels_0based=[
+                    int(c) for c in opts_dict.get("exclude_channels_0based", [])
+                ],
+                projection=opts_dict.get("projection", "mip"),
+                series_indices=opts_dict.get("series_indices"),
+            )
+
+            def cb(done: int, total: int, folder: str) -> None:
+                self._emit("progress", {"done": done, "total": total, "folder": folder})
+
+            summary = core.convert_nd2(path, opts, progress_cb=cb)
+            self._emit("done", summary)
+        except core.Nd2Error as exc:
+            # Preflight/lectura: mensaje legible para un científico, sin stacktrace.
+            self._emit("error", {"message": str(exc), "trace": ""})
         except Exception as exc:
             self._emit("error", {
                 "message": str(exc),

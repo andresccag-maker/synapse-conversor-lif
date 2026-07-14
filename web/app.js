@@ -1,8 +1,9 @@
 "use strict";
 
 const state = {
-  mode: "lif",         // "lif" | "tif"
+  mode: "lif",         // "lif" | "nd2" | "tif"
   lifPath: null,
+  nd2Path: null,
   outDir: null,
   info: null,
   excluded: new Set(), // canales 0-indexados excluidos
@@ -24,6 +25,8 @@ function updateConvertEnabled() {
   let ready;
   if (state.mode === "tif") {
     ready = !!(state.tifDir && state.outDir && state.tifScan && state.tifScan.n_files > 0);
+  } else if (state.mode === "nd2") {
+    ready = !!(state.nd2Path && state.outDir && state.info);
   } else {
     ready = !!(state.lifPath && state.outDir && state.info);
   }
@@ -32,24 +35,32 @@ function updateConvertEnabled() {
 
 function setMode(mode) {
   state.mode = mode;
+  const isLif = mode === "lif";
+  const isNd2 = mode === "nd2";
   const isTif = mode === "tif";
-  el("mode-lif").classList.toggle("active", !isTif);
+
+  el("mode-lif").classList.toggle("active", isLif);
+  el("mode-nd2").classList.toggle("active", isNd2);
   el("mode-tif").classList.toggle("active", isTif);
-  el("mode-lif").setAttribute("aria-selected", String(!isTif));
+  el("mode-lif").setAttribute("aria-selected", String(isLif));
+  el("mode-nd2").setAttribute("aria-selected", String(isNd2));
   el("mode-tif").setAttribute("aria-selected", String(isTif));
 
   el("hero-text").innerHTML = isTif
     ? "TIFFs ya exportados (<code>Experimento/Pocillo/*.tif</code>) → MIP por canal · local, sin subir nada"
+    : isNd2
+    ? "Nikon <code>.nd2</code> → TIFFs por canal · procesamiento local, sin subir nada"
     : "Leica <code>.lif</code> → TIFFs por canal · procesamiento local, sin subir nada";
 
   // Card 1: origen
-  el("lif-block").hidden = isTif;
+  el("lif-block").hidden = !isLif;
+  el("nd2-block").hidden = !isNd2;
   el("tif-block").hidden = !isTif;
-  // Card 2: campos
+  // Card 2: campos (experimento/pocillo en LIF y ND2; base solo en TIF)
   el("field-exp").hidden = isTif;
   el("field-pocillo").hidden = isTif;
   el("field-base").hidden = !isTif;
-  // Proyección: en TIF se fija a MIP
+  // Proyección: en TIF se fija a MIP; en LIF/ND2 se puede elegir MIP o Z-stack
   const proj = el("projection");
   if (isTif) {
     proj.value = "mip";
@@ -58,7 +69,7 @@ function setMode(mode) {
     proj.disabled = false;
   }
   setProjectionHint();
-  // Card 3
+  // Card 3 (ND2 comparte con LIF la lista de series + chips de exclusión)
   el("card3-title").textContent = isTif ? "TIFFs detectados" : "Series detectadas";
   el("series-section").hidden = isTif;
   el("tif-scan-section").hidden = !isTif;
@@ -339,7 +350,47 @@ async function init() {
     }
   }
 
+  async function loadNd2(p) {
+    state.nd2Path = p;
+    el("nd2-path").textContent = p;
+    el("progress-text").textContent = "inspeccionando…";
+    try {
+      const info = await api.inspect_nd2(p);
+      if (info && info.error) {
+        // Preflight rechazó el ND2 (T>1, RGB, eje raro…): mensaje legible.
+        state.nd2Path = null;
+        el("nd2-meta").hidden = false;
+        el("nd2-summary").textContent = "no convertible";
+        handleError({ message: info.error, trace: "" });
+        el("progress-text").textContent = "ND2 no convertible";
+        updateConvertEnabled();
+        return;
+      }
+      state.info = info;
+      state.lutNames = info.channel_luts || [];
+      state.maxChannels = info.series.reduce(
+        (m, s) => Math.max(m, s.n_channels),
+        0,
+      );
+      state.excluded = new Set();
+      el("exp").value = info.suggested_experiment;
+      el("pocillo").value = info.suggested_pocillo;
+      el("nd2-meta").hidden = false;
+      el("nd2-summary").textContent =
+        info.n_series + " posición(es) · SHA256 " + info.sha256.slice(0, 12) + "…";
+      const seriesCount = el("series-count");
+      if (seriesCount) seriesCount.textContent = info.n_series + " posiciones";
+      renderChips();
+      renderSeries();
+      el("progress-text").textContent = "listo";
+      updateConvertEnabled();
+    } catch (err) {
+      handleError({ message: String(err), trace: "" });
+    }
+  }
+
   el("mode-lif").addEventListener("click", () => setMode("lif"));
+  el("mode-nd2").addEventListener("click", () => setMode("nd2"));
   el("mode-tif").addEventListener("click", () => setMode("tif"));
 
   el("btn-pick-tif").addEventListener("click", async () => {
@@ -352,6 +403,12 @@ async function init() {
     const p = await api.choose_lif();
     if (!p) return;
     await loadLif(p);
+  });
+
+  el("btn-pick-nd2").addEventListener("click", async () => {
+    const p = await api.choose_nd2();
+    if (!p) return;
+    await loadNd2(p);
   });
 
   // Drag & drop sobre la dropzone (complementa el botón).
@@ -380,6 +437,35 @@ async function init() {
         return;
       }
       await loadLif(path);
+    });
+  }
+
+  // Drag & drop del .nd2 (espeja la dropzone de LIF).
+  const ndz = el("nd2-dropzone");
+  if (ndz) {
+    ["dragenter", "dragover"].forEach((ev) =>
+      ndz.addEventListener(ev, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ndz.classList.add("dragover");
+      }),
+    );
+    ["dragleave", "drop"].forEach((ev) =>
+      ndz.addEventListener(ev, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ndz.classList.remove("dragover");
+      }),
+    );
+    ndz.addEventListener("drop", async (e) => {
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      const path = file.path || file.name;
+      if (!path.toLowerCase().endsWith(".nd2")) {
+        handleError({ message: "Solo se aceptan ficheros .nd2", trace: "" });
+        return;
+      }
+      await loadNd2(path);
     });
   }
 
@@ -413,7 +499,11 @@ async function init() {
       ),
       projection: el("projection").value,
     };
-    await api.run_convert(opts);
+    if (state.mode === "nd2") {
+      await api.run_convert_nd2(opts);
+    } else {
+      await api.run_convert(opts);
+    }
   });
 
   setMode("lif");
